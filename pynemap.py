@@ -6,9 +6,8 @@ import nbt
 import Image, ImageDraw
 import progressbar
 
-debug = True
-
 def debug(msg):
+    debug = False
     if debug:
         print '[DEBUG] %s' % msg
 
@@ -125,7 +124,11 @@ def usage():
     print """%s: [options] path/to/world/level.dat
     Options:
     -o|--output-file <filename>
-    -r|--render-mode <%s>""" % \
+        The filename of the resulting image. Should end with ".png"
+        default: map.png
+    -r|--render-mode <%s>
+        The method for rendering the map image, currently only supports "overview"
+        default: overview""" % \
     (sys.argv[0], render_modes.keys())
 
 
@@ -133,6 +136,7 @@ def get_map_size(path_to_level):
     if not os.path.isdir(path_to_level):
         raise Exception('Level not found')
     else:
+        print 'Finding map size'
         map_files = glob.glob(os.path.join(path_to_level, '*', '*', '*.dat'))
         map_size = dict({
             'x_min':0,
