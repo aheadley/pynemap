@@ -1,11 +1,12 @@
 #!/usr/bin/python
 
-import glob, os.path
+import glob, os
 import nbt
 import Image, ImageDraw
 import progressbar
 import sys, logging, logging.handlers
 import numpy
+import os.path
 
 class LevelException(Exception):
     def __init__(self, err_msg):
@@ -75,6 +76,7 @@ class Level(object):
         83:(193,234,150),
         83:(100,67,50)
     })
+    base_block_colors_n = numpy.array([base_block_colors.get(color, (255,255,255)) for color in range(255)], dtype=numpy.uint8)
     chunk_size_X = 16
     chunk_size_Z = 16
     chunk_size_Y = 128
@@ -113,14 +115,13 @@ class Level(object):
         print str(self)
 
     def __str__(self):
-        return 'Name: %s, Chunks: %i, Size; %s' % (os.path.basename(self.level_dir), self.chunk_count, str(self.level_size))
+        return 'Name: %s, Chunks: %i, Size: %s' % (os.path.basename(self.level_dir), self.chunk_count, str(self.level_size))
 
 def render_overhead_chunk((map_size, chunk_file, mmap_filename)):
     map_chunk_offset_X = abs(map_size['x_min'])
     map_chunk_offset_Z = abs(map_size['z_min'])
     map_image_size = ((abs(map_size['x_max']) + map_chunk_offset_X + 1) * Level.chunk_size_X, (abs(map_size['z_max']) + map_chunk_offset_Z + 1) * Level.chunk_size_Z)
 
-    block_colors = numpy.array([Level.base_block_colors.get(color, (255,255,255)) for color in xrange(255)], dtype=numpy.uint8)
     chunk = nbt.NBTFile(chunk_file, 'rb')
 
     chunk_pos_X = chunk['Level']['xPos'].value
@@ -129,19 +130,18 @@ def render_overhead_chunk((map_size, chunk_file, mmap_filename)):
     try:
         blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(16, 16, 128)
         tops = [z[z.nonzero()][-1] for x in blocks for z in x]
-        colors = block_colors[tops].reshape(16, 16, 3)
+        colors = Level.base_block_colors_n[tops].reshape(16, 16, 3)
 
         image_array = numpy.memmap(mmap_filename, dtype=numpy.uint8, mode='r+', shape=(map_image_size[1], map_image_size[0], 3))
         image_array[(map_chunk_offset_Z+chunk_pos_Z)*16 : (map_chunk_offset_Z+chunk_pos_Z)*16+16,
                     (map_chunk_offset_X+chunk_pos_X)*16 : (map_chunk_offset_X+chunk_pos_X)*16+16] = colors.swapaxes(0, 1)
         del image_array
+        #image_array.flush()
     except Exception, err:
-        print 'Failed chunk: %s' % str((chunk_pos_X, chunk_pos_Z))
-        print err
-    return (chunk_pos_X, chunk_pos_Z)
+        print 'Failed chunk %s: %s' % (str((chunk_pos_X, chunk_pos_Z)), err)
 
-def init_mmap(mmap_file, map_image_size, default_color=(255,255,255)):
-    image_array = numpy.memmap(mmap_file, dtype=numpy.uint8, mode='w+', shape=(map_image_size[1], map_image_size[0], 3))
+def init_mmap(mmap_filename, map_image_size, default_color=(255,255,255)):
+    image_array = numpy.memmap(mmap_filename, dtype=numpy.uint8, mode='w+', shape=(map_image_size[1], map_image_size[0], 3))
     image_array[:] = default_color
     image_array.flush()
     return image_array
@@ -156,6 +156,7 @@ if __name__ == '__main__':
     from tempfile import mkstemp
     import numpy
     import multiprocessing
+    import os
 
     def main():
         short_options = 'o:r:v'
@@ -180,7 +181,7 @@ if __name__ == '__main__':
                 if opt in ('-o', '--output-file'):
                     options['output-file'] = arg
                 elif opt in ('-r', '--render-mode'):
-                    if arg in Mapper.render_modes:
+                    if arg in render_modes:
                         options['render-mode'] = arg
                     else:
                         raise getopt.GetoptError('Invalid option (%s) argument (%s)' %
@@ -191,29 +192,31 @@ if __name__ == '__main__':
                     options['use-alpha'] = True
                 elif opt == '--only-blocks':
                     render_options['selected-blocks'] = arg.split(',')
-                elif opt == '--processess':
+                elif opt == '--processes':
                     options['processes'] = int(arg)
                 else:
                     pass
         except getopt.GetoptError, error:
             print error
             usage()
-            return False
 
         def _get_chunk_args(chunk_file):
             return (level.level_size, chunk_file, mmap_filename)
 
         time_start = time.time()
+        print 'Options; %s' % options
         level = Level(level_file=options['level-file'])
         mmap_file_handle, mmap_filename = mkstemp()
+        #mmap_filename = '/dev/shm/tmpfile'
         map_image_size = ((abs(level.level_size['x_max']) + abs(level.level_size['x_min']) + 1) * Level.chunk_size_X, (abs(level.level_size['z_max']) + abs(level.level_size['z_min']) + 1) * Level.chunk_size_Z)
         image_array = init_mmap(mmap_filename, map_image_size)
         pool = multiprocessing.Pool(options['processes'])
-        pool.map(render_modes[options['render-mode']], map(_get_chunk_args, level.chunk_files), int(level.chunk_count/options['processes']))
+        pool.map(render_modes[options['render-mode']], map(_get_chunk_args, level.chunk_files), max(level.chunk_count/options['processes'], 1))
         try:
             Image.fromarray(image_array).save(options['output-file'])
         except:
             print 'Failed to save image'
+        os.remove(mmap_filename)
         print 'Render time: %s' % (time.time() - time_start)
 
     def usage():
@@ -242,7 +245,6 @@ if __name__ == '__main__':
                 *NYI* Overlay onto overhead map
 """ % \
         (sys.argv[0], render_modes.keys())
-
     main()
 
 

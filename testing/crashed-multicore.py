@@ -98,15 +98,17 @@ def render_chunk((map_size, chunk_file)):
     end_chunk_setup = time.time()
 
     chunk_render = time.time()
+    try:
+        blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(16, 16, 128)
+        tops = [z[z.nonzero()][-1] for x in blocks for z in x]
+        colors = block_colors[tops].reshape(16, 16, 3)
 
-    blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(16, 16, 128)
-    tops = [z[z.nonzero()][-1] for x in blocks for z in x]
-    colors = block_colors[tops].reshape(16, 16, 3)
-
-    image_array = numpy.memmap(mmap_filen, dtype=numpy.uint8, mode='r+', shape=(map_image_size[1], map_image_size[0], 3))
-    image_array[(map_chunk_offset_Z+chunk_pos_Z)*16 : (map_chunk_offset_Z+chunk_pos_Z)*16+16,
-                (map_chunk_offset_X+chunk_pos_X)*16 : (map_chunk_offset_X+chunk_pos_X)*16+16] = colors.swapaxes(0, 1)
-    del image_array
+        image_array = numpy.memmap(mmap_filen, dtype=numpy.uint8, mode='r+', shape=(map_image_size[1], map_image_size[0], 3))
+        image_array[(map_chunk_offset_Z+chunk_pos_Z)*16 : (map_chunk_offset_Z+chunk_pos_Z)*16+16,
+                    (map_chunk_offset_X+chunk_pos_X)*16 : (map_chunk_offset_X+chunk_pos_X)*16+16] = colors.swapaxes(0, 1)
+        del image_array
+    except:
+        pass
 
     end_chunk_render = time.time()
 
