@@ -1,0 +1,10 @@
+    N
+  W   E
+    S
+
+   -X       +Y
+ +Z  -Z
+   +X       -Y
+
+
+unsigned char BlockID = Blocks[y + x * ChunkSizeY(=128) + z * ChunkSizeY * ChunkSizeX(=16)]; 
