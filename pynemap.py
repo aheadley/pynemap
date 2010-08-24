@@ -79,18 +79,19 @@ class Mapper(object):
     chunk_size_X = 16
     chunk_size_Y = 128
     chunk_size_Z = 16
-    render_modes = dict({'blocks':None, 'oblique':None, 'overhead':None})
+    render_modes = dict({'blocks':None, 'oblique':None, 'oblique_angled':None, 'overhead':None})
 
     def __init__(self, level_file, verbose=False, use_alpha=False, keep_chunks=True):
         self._verbose       = verbose
         self._use_alpha     = use_alpha
         self._keep_chunks   = keep_chunks
 
-        self.render_modes['blocks']     = self._render_blocks
-        self.render_modes['oblique']    = self._render_oblique
-        self.render_modes['overhead']   = self._render_overhead
-        self.render_modes['slices']     = self._render_slices
-        self.render_modes['text']       = self._render_text
+        self.render_modes['blocks']         = self._render_blocks
+        self.render_modes['oblique']        = self._render_oblique
+        self.render_modes['oblique_angled'] = self._render_oblique_angled
+        self.render_modes['overhead']       = self._render_overhead
+        self.render_modes['slices']         = self._render_slices
+        self.render_modes['text']           = self._render_text
 
 
         self._chunks = []
@@ -150,7 +151,7 @@ class Mapper(object):
             self._chunk_files = glob.glob(os.path.join(self._level_dir, '*', '*', '*.dat'))
             
             if load_sorted:
-                self._chunk_files = sorted(self._chunk_files, key=lambda chunk_file: int(os.path.basename(chunk_file).split('.')[2],36))
+                self._chunk_files = sorted(sorted(self._chunk_files, key=lambda chunk_file: int(os.path.basename(chunk_file).split('.')[1],36)), key=lambda chunk_file: int(os.path.basename(chunk_file).split('.')[2],36))
             if self._keep_chunks and not self._chunks_loaded:
                 self._chunks = map(lambda map_file: nbt.NBTFile(map_file,'rb'), self._chunk_files)
         except Exception, err:
@@ -234,6 +235,79 @@ class Mapper(object):
             map_image.save(output_file)
         except IOError, err:
             self.err(err)
+
+
+    def _render_oblique_angled(self, output_file, options):
+        height_shading = options.get('height_shading', 0.7)
+        shade = lambda color_val: int(color_val * height_shading)
+        shaded_block_colors = dict({})
+        self.msg('Generating shaded block colors')
+        for block in Mapper.block_colors:
+            shaded_block_colors[block] = tuple(map(shade, Mapper.block_colors[block]))
+
+        self._load_chunks(load_sorted=True)
+        map_size = self.get_map_size()
+        map_chunk_offset_X = abs(map_size['x_min'])
+        map_chunk_offset_Z = abs(map_size['z_min'])
+
+        map_image_size = ((map_size['x_max'] + map_chunk_offset_X) * (Mapper.chunk_size_X * 2 - 1),
+            (map_size['z_max'] + map_chunk_offset_Z) * (Mapper.chunk_size_Z * 2 - 1) + Mapper.chunk_size_Y)
+
+        self.msg('Map image size: %s' % str(map_image_size))
+        map_image = Image.new('RGB', map_image_size, (255,255,255))
+        map_image_pixels = map_image.load()
+
+        if self._verbose:
+            progress = progressbar.ProgressBar(maxval=self._chunk_count)
+            count = 0
+            progress.start()
+
+        last_chunk_pos_Z = None
+        angled_pixel_offset_Z = 0
+        angled_pixel_offset_X = 0
+        for chunk in self._chunks if self._keep_chunks else self._chunk_files:
+            if not self._keep_chunks:
+                chunk = nbt.NBTFile(chunk, 'rb')
+
+            chunk_pos_X = chunk['Level']['xPos'].value
+            #for chunks, z would be y on a graph
+            chunk_pos_Z = chunk['Level']['zPos'].value
+
+            if chunk_pos_Z == last_chunk_pos_Z:
+                angled_pixel_offset_Z += Mapper.chunk_size_Z
+            else:
+                angled_pixel_offset_Z = 0
+                angled_pixel_offset_X += Mapper.chunk_size_X
+                last_chunk_pos_Z = chunk_pos_Z
+
+            blocks = map(ord, chunk['Level']['Blocks'].value)
+            chunk_pixel_offset_X = (chunk_pos_X + map_chunk_offset_X) * Mapper.chunk_size_X - angled_pixel_offset_X +500
+            chunk_pixel_offset_Z = (chunk_pos_Z + map_chunk_offset_Z) * Mapper.chunk_size_Z + Mapper.chunk_size_Y + angled_pixel_offset_Z +200
+
+            for z in range(Mapper.chunk_size_Z)[::-1]:
+                column = z * Mapper.chunk_size_Y * Mapper.chunk_size_X
+                for x in range(Mapper.chunk_size_X):
+                    row = x * Mapper.chunk_size_Y
+                    for y in range(Mapper.chunk_size_Y):
+                        block = blocks[y + row + column]
+                        if block != 0:
+                            # for blocks in a chunk, x would be y on a graph, z would be x
+                            try:
+                                map_image_pixels[chunk_pixel_offset_X + z - x, chunk_pixel_offset_Z + x - z - y] = \
+                                    Mapper.block_colors.get(block, (0,0,0))
+                                map_image_pixels[chunk_pixel_offset_X + z - x - 1, chunk_pixel_offset_Z + x - z - y] = \
+                                    shaded_block_colors.get(block, (0,0,0))
+                            except:
+                                pass
+            if self._verbose:
+                count += 1
+                progress.update(count)
+
+        if self._verbose:
+            progress.finish()
+            self.msg('Render took %i seconds' % progress.seconds_elapsed)
+
+        map_image.save(output_file)
 
 
     def _render_oblique(self, output_file, options):
