@@ -1,18 +1,20 @@
 #!/usr/bin/python
 
-import glob, os
+import glob, os.path
 import nbt
 import Image, ImageDraw
 import progressbar
 import sys, logging, logging.handlers
-import numpy
-import os.path
+import numpy, shmem
+import multiprocessing
 
 class LevelException(Exception):
     def __init__(self, err_msg):
         self.msg = err_msg
     def __str__(self):
         return self.msg
+
+image_array_global = None
 
 class Level(object):
     base_block_colors = dict({
@@ -117,7 +119,12 @@ class Level(object):
     def __str__(self):
         return 'Name: %s, Chunks: %i, Size: %s' % (os.path.basename(self.level_dir), self.chunk_count, str(self.level_size))
 
-def render_overhead_chunk((map_size, chunk_file, mmap_filename)):
+def _init_multiprocess(array):
+    global image_array_global
+    image_array_global = array
+
+
+def render_overhead_chunk((map_size, chunk_file)):
     map_chunk_offset_X = abs(map_size['x_min'])
     map_chunk_offset_Z = abs(map_size['z_min'])
     map_image_size = ((abs(map_size['x_max']) + map_chunk_offset_X + 1) * Level.chunk_size_X, (abs(map_size['z_max']) + map_chunk_offset_Z + 1) * Level.chunk_size_Z)
@@ -132,18 +139,15 @@ def render_overhead_chunk((map_size, chunk_file, mmap_filename)):
         tops = [z[z.nonzero()][-1] for x in blocks for z in x]
         colors = Level.base_block_colors_n[tops].reshape(16, 16, 3)
 
-        image_array = numpy.memmap(mmap_filename, dtype=numpy.uint8, mode='r+', shape=(map_image_size[1], map_image_size[0], 3))
-        image_array[(map_chunk_offset_Z+chunk_pos_Z)*16 : (map_chunk_offset_Z+chunk_pos_Z)*16+16,
+        global image_array_global
+        image_array_global[(map_chunk_offset_Z+chunk_pos_Z)*16 : (map_chunk_offset_Z+chunk_pos_Z)*16+16,
                     (map_chunk_offset_X+chunk_pos_X)*16 : (map_chunk_offset_X+chunk_pos_X)*16+16] = colors.swapaxes(0, 1)
-        del image_array
-        #image_array.flush()
     except Exception, err:
         print 'Failed chunk %s: %s' % (str((chunk_pos_X, chunk_pos_Z)), err)
 
-def init_mmap(mmap_filename, map_image_size, default_color=(255,255,255)):
-    image_array = numpy.memmap(mmap_filename, dtype=numpy.uint8, mode='w+', shape=(map_image_size[1], map_image_size[0], 3))
+def init_mmap(map_image_size, default_color=(255,255,255)):
+    image_array = shmem.create((map_image_size[1], map_image_size[0], 3), dtype=numpy.uint8)
     image_array[:] = default_color
-    image_array.flush()
     return image_array
 
 render_modes = dict({
@@ -152,11 +156,6 @@ render_modes = dict({
 
 if __name__ == '__main__':
     import getopt, sys
-    import time
-    from tempfile import mkstemp
-    import numpy
-    import multiprocessing
-    import os
 
     def main():
         short_options = 'o:r:v'
@@ -193,31 +192,36 @@ if __name__ == '__main__':
                 elif opt == '--only-blocks':
                     render_options['selected-blocks'] = arg.split(',')
                 elif opt == '--processes':
-                    options['processes'] = int(arg)
+                    options['processes'] = max(int(arg), 1)
                 else:
                     pass
         except getopt.GetoptError, error:
             print error
             usage()
+            return None
 
         def _get_chunk_args(chunk_file):
-            return (level.level_size, chunk_file, mmap_filename)
+            return (level.level_size, chunk_file)
 
-        time_start = time.time()
+        """
+        def _init_multiprocess(array):
+            global image_array
+            image_array = array
+        """
+
         print 'Options; %s' % options
         level = Level(level_file=options['level-file'])
-        mmap_file_handle, mmap_filename = mkstemp()
-        #mmap_filename = '/dev/shm/tmpfile'
         map_image_size = ((abs(level.level_size['x_max']) + abs(level.level_size['x_min']) + 1) * Level.chunk_size_X, (abs(level.level_size['z_max']) + abs(level.level_size['z_min']) + 1) * Level.chunk_size_Z)
-        image_array = init_mmap(mmap_filename, map_image_size)
-        pool = multiprocessing.Pool(options['processes'])
-        pool.map(render_modes[options['render-mode']], map(_get_chunk_args, level.chunk_files), max(level.chunk_count/options['processes'], 1))
+        #image_array = init_mmap(map_image_size)
+        image_array = shmem.create((map_image_size[1], map_image_size[0], 3), dtype=numpy.uint8)
+        image_array[:] = (255,255,255)
+
+        pool = multiprocessing.Pool(options['processes'], _init_multiprocess, (image_array,))
+        pool.map(render_modes[options['render-mode']], map(_get_chunk_args, level.chunk_files), level.chunk_count/options['processes'])
         try:
             Image.fromarray(image_array).save(options['output-file'])
         except:
             print 'Failed to save image'
-        os.remove(mmap_filename)
-        print 'Render time: %s' % (time.time() - time_start)
 
     def usage():
         print """%s: [options] path/to/world/level.dat
@@ -242,418 +246,6 @@ if __name__ == '__main__':
             --only-blocks <block[,block[,block]]>
                 Comma separated list of (dec) block ids to render
             --overlayed
-                *NYI* Overlay onto overhead map
-""" % \
+                *NYI* Overlay onto overhead map""" % \
         (sys.argv[0], render_modes.keys())
     main()
-
-
-
-class Mapper(object):
-    block_colors = dict({
-        1:(120,120,120),
-        2:(117,176,73),
-        3:(134,96,67),
-        4:(115,115,115),
-        5:(157,128,79),
-        6:(120,120,120),
-        7:(84,84,84),
-        8:(0,0,255),
-        9:(0,0,255),
-        10:(255,90,0),
-        11:(255,90,0),
-        12:(228,228,149),
-        13:(136,126,126),
-        14:(143,140,125),
-        15:(136,130,127),
-        16:(115,115,115),
-        17:(102,81,51),
-        18:(0,255,0),
-        20:(255,255,255),
-        35:(222,222,222),
-        38:(255,0,0),
-        37:(255,255,0),
-        41:(231,165,45),
-        42:(191,191,191),
-        43:(200,200,200),
-        44:(200,200,200),
-        45:(170,86,62),
-        46:(160,83,65),
-        49:(26,11,43),
-        50:(245,220,50),
-        51:(255,170,30),
-        52:(245,220,50),
-        53:(157,128,79),
-        54:(125,91,38),
-        55:(245,220,50),
-        56:(129,140,143),
-        57:(45,166,152),
-        58:(114,88,56),
-        59:(146,192,0),
-        60:(95,58,30),
-        61:(96,96,96),
-        62:(96,96,96),
-        63:(111,91,54),
-        64:(136,109,67),
-        65:(181,140,64),
-        66:(150,134,102),
-        67:(115,115,115),
-        71:(191,191,191),
-        73:(131,107,107),
-        74:(131,107,107),
-        75:(181,140,64),
-        76:(255,0,0),
-        78:(255,255,255),
-        79:(83,113,163),
-        80:(250,250,250),
-        81:(25,120,25),
-        82:(151,157,169),
-        83:(193,234,150),
-        83:(100,67,50)
-    })
-
-    chunk_size_X = 16
-    chunk_size_Y = 128
-    chunk_size_Z = 16
-    render_modes = dict({'blocks':None, 'oblique':None, 'oblique_angled':None, 'overhead':None})
-
-    def __init__(self, level_file, verbose=False, use_alpha=False, keep_chunks=True):
-        self._verbose       = verbose
-        self._use_alpha     = use_alpha
-        self._keep_chunks   = keep_chunks
-
-        self.render_modes['blocks']         = self._render_blocks
-        self.render_modes['oblique']        = self._render_oblique
-        self.render_modes['oblique_angled'] = self._render_oblique_angled
-        self.render_modes['overhead']       = self._render_overhead
-        self.render_modes['slices']         = self._render_slices
-        self.render_modes['text']           = self._render_text
-
-
-        self._chunks = []
-        self._chunks_loaded = False
-        self._chunk_count = 0
-
-        try:
-            nbt.NBTFile(level_file, 'rb')
-        except Exception, e:
-            raise MapperException(str(e))
-        else:
-            self._level_dir = os.path.dirname(level_file)
-
-    def msg(self, msg):
-        if self._verbose:
-            print '[INFO] %s' % str(msg)
-
-    def err(self, msg):
-        print '[ERROR] %s' % str(msg)
-
-    def get_map_size(self, use_chunks=False):
-            map_size = dict({
-                'x_min':0,
-                'x_max':0,
-                'z_min':0,
-                'z_max':0
-            })
-
-            if not self._chunks_loaded:
-                self._load_chunks()
-
-            self.msg('Finding map size...')
-
-            if self._keep_chunks:
-                chunks_xpos = []
-                chunks_zpos = []
-
-                for chunk in self._chunks:
-                    chunks_xpos.append(chunk['Level']['xPos'].value)
-                    chunks_zpos.append(chunk['Level']['zPos'].value)
-            else:
-                chunks_xpos = map(lambda chunk_file: int(os.path.basename(chunk_file).split('.')[1],36), self._chunk_files)
-                chunks_zpos = map(lambda chunk_file: int(os.path.basename(chunk_file).split('.')[2],36), self._chunk_files)
-
-            map_size['x_min'] = min(chunks_xpos)
-            map_size['x_max'] = max(chunks_xpos)
-            map_size['z_min'] = min(chunks_zpos)
-            map_size['z_max'] = max(chunks_zpos)
-
-            self.msg('Map size: %s' % str(map_size))
-
-            return map_size
-
-    def _load_chunks(self, load_sorted=False):
-        try:
-            self.msg('Loading chunks')
-            self._chunk_files = glob.glob(os.path.join(self._level_dir, '*', '*', '*.dat'))
-            
-            if load_sorted:
-                self._chunk_files = sorted(sorted(self._chunk_files, key=lambda chunk_file: int(os.path.basename(chunk_file).split('.')[1],36)), key=lambda chunk_file: int(os.path.basename(chunk_file).split('.')[2],36))
-            if self._keep_chunks and not self._chunks_loaded:
-                self._chunks = map(lambda map_file: nbt.NBTFile(map_file,'rb'), self._chunk_files)
-        except Exception, err:
-            self._chunks = []
-            self._chunks_loaded = False
-            self._chunk_count = 0
-            self.err('Failed to load chunks')
-            raise err
-        else:
-            self._chunks_loaded = True
-            self._chunk_count = len(self._chunks if self._keep_chunks else self._chunk_files)
-            self.msg('Loaded %i chunks' % self._chunk_count)
-
-    def render(self, mode, output_file, options=None):
-        if not options:
-            options = dict({})
-        if mode in Mapper.render_modes:
-            self.msg('Rendering %s map of %s as %s...' % (mode, self._level_dir, output_file))
-            self.render_modes[mode](output_file, options)
-            self.msg('Render complete')
-        else:
-            raise MapperException('Unknown render mode: %s' % mode)
-
-    def _render_text(self, output_file, options):
-        print 'Not Yet Implemented'
-
-    def _render_slices(self, output_file, options):
-        print 'Not Yet Implemented'
-    
-    def _render_blocks(self, output_file, options):
-        selected_blocks     = map(int, options.get('selected-blocks', [48]))
-        overlayed           = options.get('overlayed', False)
-
-        map_size = self.get_map_size()
-        map_chunk_offset_X = abs(map_size['x_min'])
-        map_chunk_offset_Z = abs(map_size['z_min'])
-
-        map_image_size = ((abs(map_size['x_max']) + map_chunk_offset_X) * Mapper.chunk_size_X, (abs(map_size['z_max']) + map_chunk_offset_Z) * Mapper.chunk_size_Z)
-        self.msg('Map image size: %s' % str(map_image_size))
-        map_image = Image.new('RGBA', map_image_size, (255,255,255, 0))
-        map_image_pixels = map_image.load()
-
-        if self._verbose:
-            progress = progressbar.ProgressBar(maxval=self._chunk_count)
-            count = 0
-            progress.start()
-
-        for chunk in self._chunks if self._keep_chunks else self._chunk_files:
-            if not self._keep_chunks:
-                chunk = nbt.NBTFile(chunk, 'rb')
-            chunk_pos_X = chunk['Level']['xPos'].value
-            #for chunks, z would be y on a graph
-            chunk_pos_Z = chunk['Level']['zPos'].value
-            blocks = map(ord, chunk['Level']['Blocks'].value)
-            chunk_pixel_offset_X = (chunk_pos_X + map_chunk_offset_X) * Mapper.chunk_size_X
-            chunk_pixel_offset_Z = (chunk_pos_Z + map_chunk_offset_Z) * Mapper.chunk_size_Z
-
-            for x in range(Mapper.chunk_size_X):
-                row = x * Mapper.chunk_size_Y
-                for z in range(Mapper.chunk_size_Z)[::-1]:
-                    column = z * Mapper.chunk_size_Y * Mapper.chunk_size_X
-                    for y in range(Mapper.chunk_size_Y)[::-1]:
-                        block = blocks[y + row + column]
-                        if block in selected_blocks:
-                            # for blocks in a chunk, x would be y on a graph, z would be x
-                            try:
-                                map_image_pixels[chunk_pixel_offset_X + z, chunk_pixel_offset_Z + x] = \
-                                    (0,0,0,255)
-                            except:
-                                pass
-                            break
-            if self._verbose:
-                count += 1
-                progress.update(count)
-
-        if self._verbose:
-            progress.finish()
-            self.msg('Render took %i seconds' % progress.seconds_elapsed)
-
-        try:
-            map_image.save(output_file)
-        except IOError, err:
-            self.err(err)
-
-
-    def _render_oblique_angled(self, output_file, options):
-        height_shading = options.get('height_shading', 0.7)
-        shade = lambda color_val: int(color_val * height_shading)
-        shaded_block_colors = dict({})
-        self.msg('Generating shaded block colors')
-        for block in Mapper.block_colors:
-            shaded_block_colors[block] = tuple(map(shade, Mapper.block_colors[block]))
-
-        self._load_chunks(load_sorted=True)
-        map_size = self.get_map_size()
-        map_chunk_offset_X = abs(map_size['x_min'])
-        map_chunk_offset_Z = abs(map_size['z_min'])
-
-        map_image_size = ((map_size['x_max'] + map_chunk_offset_X) * (Mapper.chunk_size_X * 2 - 1),
-            (map_size['z_max'] + map_chunk_offset_Z) * (Mapper.chunk_size_Z * 2 - 1) + Mapper.chunk_size_Y)
-
-        self.msg('Map image size: %s' % str(map_image_size))
-        map_image = Image.new('RGB', map_image_size, (255,255,255))
-        map_image_pixels = map_image.load()
-
-        if self._verbose:
-            progress = progressbar.ProgressBar(maxval=self._chunk_count)
-            count = 0
-            progress.start()
-
-        last_chunk_pos_Z = None
-        angled_pixel_offset_Z = 0
-        angled_pixel_offset_X = 0
-        for chunk in self._chunks if self._keep_chunks else self._chunk_files:
-            if not self._keep_chunks:
-                chunk = nbt.NBTFile(chunk, 'rb')
-
-            chunk_pos_X = chunk['Level']['xPos'].value
-            #for chunks, z would be y on a graph
-            chunk_pos_Z = chunk['Level']['zPos'].value
-
-            if chunk_pos_Z == last_chunk_pos_Z:
-                angled_pixel_offset_Z += Mapper.chunk_size_Z
-            else:
-                angled_pixel_offset_Z = 0
-                angled_pixel_offset_X += Mapper.chunk_size_X
-                last_chunk_pos_Z = chunk_pos_Z
-
-            blocks = map(ord, chunk['Level']['Blocks'].value)
-            chunk_pixel_offset_X = (chunk_pos_X + map_chunk_offset_X) * Mapper.chunk_size_X - angled_pixel_offset_X +500
-            chunk_pixel_offset_Z = (chunk_pos_Z + map_chunk_offset_Z) * Mapper.chunk_size_Z + Mapper.chunk_size_Y + angled_pixel_offset_Z +200
-
-            for z in range(Mapper.chunk_size_Z)[::-1]:
-                column = z * Mapper.chunk_size_Y * Mapper.chunk_size_X
-                for x in range(Mapper.chunk_size_X):
-                    row = x * Mapper.chunk_size_Y
-                    for y in range(Mapper.chunk_size_Y):
-                        block = blocks[y + row + column]
-                        if block != 0:
-                            # for blocks in a chunk, x would be y on a graph, z would be x
-                            try:
-                                map_image_pixels[chunk_pixel_offset_X + z - x, chunk_pixel_offset_Z + x - z - y] = \
-                                    Mapper.block_colors.get(block, (0,0,0))
-                                map_image_pixels[chunk_pixel_offset_X + z - x - 1, chunk_pixel_offset_Z + x - z - y] = \
-                                    shaded_block_colors.get(block, (0,0,0))
-                            except:
-                                pass
-            if self._verbose:
-                count += 1
-                progress.update(count)
-
-        if self._verbose:
-            progress.finish()
-            self.msg('Render took %i seconds' % progress.seconds_elapsed)
-
-        map_image.save(output_file)
-
-
-    def _render_oblique(self, output_file, options):
-        height_shading = options.get('height_shading', 0.5)
-        shade = lambda color_val: int(color_val * height_shading)
-        shaded_block_colors = dict({})
-        self.msg('Generating shaded block colors')
-        for block in Mapper.block_colors:
-            shaded_block_colors[block] = tuple(map(shade, Mapper.block_colors[block]))
-
-        self._load_chunks(load_sorted=True)
-        map_size = self.get_map_size()
-        map_chunk_offset_X = abs(map_size['x_min'])
-        map_chunk_offset_Z = abs(map_size['z_min'])
-
-        map_image_size = ((abs(map_size['x_max']) + map_chunk_offset_X) * Mapper.chunk_size_X, (abs(map_size['z_max']) + map_chunk_offset_Z) * Mapper.chunk_size_Z + Mapper.chunk_size_Y)
-        self.msg('Map image size: %s' % str(map_image_size))
-        map_image = Image.new('RGB', map_image_size, (255,255,255))
-        map_image_pixels = map_image.load()
-
-        if self._verbose:
-            progress = progressbar.ProgressBar(maxval=self._chunk_count)
-            count = 0
-            progress.start()
-
-        
-        for chunk in self._chunks if self._keep_chunks else self._chunk_files:
-            if not self._keep_chunks:
-                chunk = nbt.NBTFile(chunk, 'rb')
-
-            chunk_pos_X = chunk['Level']['xPos'].value
-            #for chunks, z would be y on a graph
-            chunk_pos_Z = chunk['Level']['zPos'].value
-            blocks = map(ord, chunk['Level']['Blocks'].value)
-            chunk_pixel_offset_X = (chunk_pos_X + map_chunk_offset_X) * Mapper.chunk_size_X
-            chunk_pixel_offset_Z = (chunk_pos_Z + map_chunk_offset_Z) * Mapper.chunk_size_Z + Mapper.chunk_size_Y
-
-            for z in range(Mapper.chunk_size_Z)[::-1]:
-                column = z * Mapper.chunk_size_Y * Mapper.chunk_size_X
-                for x in range(Mapper.chunk_size_X):
-                    row = x * Mapper.chunk_size_Y
-                    for y in range(Mapper.chunk_size_Y):
-                        block = blocks[y + row + column]
-                        if block != 0:
-                            # for blocks in a chunk, x would be y on a graph, z would be x
-                            try:
-                                map_image_pixels[chunk_pixel_offset_X + z, chunk_pixel_offset_Z + x - y] = \
-                                    Mapper.block_colors.get(block, (0,0,0))
-                                map_image_pixels[chunk_pixel_offset_X + z, chunk_pixel_offset_Z + x - y + 1] = \
-                                    shaded_block_colors.get(block, (0,0,0))
-                            except:
-                                pass
-            if self._verbose:
-                count += 1
-                progress.update(count)
-
-        if self._verbose:
-            progress.finish()
-            self.msg('Render took %i seconds' % progress.seconds_elapsed)
-
-        map_image.save(output_file)
-
-    def _render_overhead(self, output_file, options):
-        map_size = self.get_map_size()
-        map_chunk_offset_X = abs(map_size['x_min'])
-        map_chunk_offset_Z = abs(map_size['z_min'])
-
-        map_image_size = ((abs(map_size['x_max']) + map_chunk_offset_X) * Mapper.chunk_size_X, (abs(map_size['z_max']) + map_chunk_offset_Z) * Mapper.chunk_size_Z)
-        self.msg('Map image size: %s' % str(map_image_size))
-        map_image = Image.new('RGB', map_image_size, (255,255,255))
-        map_image_pixels = map_image.load()
-
-        if self._verbose:
-            progress = progressbar.ProgressBar(maxval=self._chunk_count)
-            count = 0
-            progress.start()
-
-        for chunk in self._chunks if self._keep_chunks else self._chunk_files:
-            if not self._keep_chunks:
-                chunk = nbt.NBTFile(chunk, 'rb')
-            chunk_pos_X = chunk['Level']['xPos'].value
-            #for chunks, z would be y on a graph
-            chunk_pos_Z = chunk['Level']['zPos'].value
-            blocks = map(ord, chunk['Level']['Blocks'].value)
-            chunk_pixel_offset_X = (chunk_pos_X + map_chunk_offset_X) * Mapper.chunk_size_X
-            chunk_pixel_offset_Z = (chunk_pos_Z + map_chunk_offset_Z) * Mapper.chunk_size_Z
-
-            for x in range(Mapper.chunk_size_X):
-                row = x * Mapper.chunk_size_Y
-                for z in range(Mapper.chunk_size_Z)[::-1]:
-                    column = z * Mapper.chunk_size_Y * Mapper.chunk_size_X
-                    for y in range(Mapper.chunk_size_Y)[::-1]:
-                        block = blocks[y + row + column]
-                        if block != 0:
-                            # for blocks in a chunk, x would be y on a graph, z would be x
-                            try:
-                                map_image_pixels[chunk_pixel_offset_X + z, chunk_pixel_offset_Z + x] = \
-                                    Mapper.block_colors.get(block, (0,0,0))
-                            except:
-                                pass
-                            break
-            if self._verbose:
-                count += 1
-                progress.update(count)
-
-        if self._verbose:
-            progress.finish()
-            self.msg('Render took %i seconds' % progress.seconds_elapsed)
-
-        try:
-            map_image.save(output_file)
-        except IOError, err:
-            self.err(err)
