@@ -14,8 +14,6 @@ class LevelException(Exception):
     def __str__(self):
         return self.msg
 
-image_array_global = None
-
 class Level(object):
     base_block_colors = dict({
         1:(120,120,120),
@@ -78,7 +76,7 @@ class Level(object):
         83:(193,234,150),
         83:(100,67,50)
     })
-    base_block_colors_n = numpy.array([base_block_colors.get(color, (255,255,255)) for color in range(255)], dtype=numpy.uint8)
+    base_block_colors_array = numpy.array([base_block_colors.get(color, (255,255,255)) for color in range(255)], dtype=numpy.uint8)
     chunk_size_X = 16
     chunk_size_Z = 16
     chunk_size_Y = 128
@@ -119,15 +117,9 @@ class Level(object):
     def __str__(self):
         return 'Name: %s, Chunks: %i, Size: %s' % (os.path.basename(self.level_dir), self.chunk_count, str(self.level_size))
 
-def _init_multiprocess(array):
-    global image_array_global
-    image_array_global = array
-
-
 def render_overhead_chunk((map_size, chunk_file)):
     map_chunk_offset_X = abs(map_size['x_min'])
     map_chunk_offset_Z = abs(map_size['z_min'])
-    map_image_size = ((abs(map_size['x_max']) + map_chunk_offset_X + 1) * Level.chunk_size_X, (abs(map_size['z_max']) + map_chunk_offset_Z + 1) * Level.chunk_size_Z)
 
     chunk = nbt.NBTFile(chunk_file, 'rb')
 
@@ -137,21 +129,40 @@ def render_overhead_chunk((map_size, chunk_file)):
     try:
         blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(16, 16, 128)
         tops = [z[z.nonzero()][-1] for x in blocks for z in x]
-        colors = Level.base_block_colors_n[tops].reshape(16, 16, 3)
+        colors = Level.base_block_colors_array[tops].reshape(16, 16, 3)
 
-        global image_array_global
-        image_array_global[(map_chunk_offset_Z+chunk_pos_Z)*16 : (map_chunk_offset_Z+chunk_pos_Z)*16+16,
-                    (map_chunk_offset_X+chunk_pos_X)*16 : (map_chunk_offset_X+chunk_pos_X)*16+16] = colors.swapaxes(0, 1)
+        image_array[(map_chunk_offset_Z + chunk_pos_Z) * Level.chunk_size_Z : (map_chunk_offset_Z + chunk_pos_Z + 1) * Level.chunk_size_Z,
+                    (map_chunk_offset_X + chunk_pos_X) * Level.chunk_size_X : (map_chunk_offset_X + chunk_pos_X + 1) * Level.chunk_size_X] = colors.swapaxes(0, 1)
     except Exception, err:
         print 'Failed chunk %s: %s' % (str((chunk_pos_X, chunk_pos_Z)), err)
 
-def init_mmap(map_image_size, default_color=(255,255,255)):
+def render_oblique_chunk((map_size, chunk_file)):
+    map_chunk_offset_X = abs(map_size['x_min'])
+    map_chunk_offset_Z = abs(map_size['z_min'])
+
+    chunk = nbt.NBTFile(chunk_file, 'rb')
+
+    chunk_pos_X = chunk['Level']['xPos'].value
+    chunk_pos_Z = chunk['Level']['zPos'].value
+
+    try:
+        blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(16, 16, 128)
+        tops = [z[z.nonzero()][-1] for x in blocks for z in x]
+        colors = Level.base_block_colors_array[tops].reshape(16, 16, 3)
+
+        image_array[(map_chunk_offset_Z + chunk_pos_Z) * Level.chunk_size_Z : (map_chunk_offset_Z + chunk_pos_Z + 1) * Level.chunk_size_Z,
+                    (map_chunk_offset_X + chunk_pos_X) * Level.chunk_size_X : (map_chunk_offset_X + chunk_pos_X + 1) * Level.chunk_size_X] = colors.swapaxes(0, 1)
+    except Exception, err:
+        print 'Failed chunk %s: %s' % (str((chunk_pos_X, chunk_pos_Z)), err)
+
+def init_image_array(map_image_size, default_color=(255,255,255)):
     image_array = shmem.create((map_image_size[1], map_image_size[0], 3), dtype=numpy.uint8)
     image_array[:] = default_color
     return image_array
 
 render_modes = dict({
-    'overhead':render_overhead_chunk
+    'overhead':render_overhead_chunk,
+    'oblique':render_oblique_chunk
 })
 
 if __name__ == '__main__':
@@ -166,6 +177,7 @@ if __name__ == '__main__':
             'output-file':'map.png',
             'verbose':False,
             'use-alpha':False,
+                # this may need to be doubled, should check on other cpus
             'processes':multiprocessing.cpu_count()
         })
         render_options = dict({})
@@ -195,28 +207,27 @@ if __name__ == '__main__':
                     options['processes'] = max(int(arg), 1)
                 else:
                     pass
-        except getopt.GetoptError, error:
-            print error
+        except getopt.GetoptError, err:
+            print err
             usage()
-            return None
+            return False
 
         def _get_chunk_args(chunk_file):
             return (level.level_size, chunk_file)
 
-        """
         def _init_multiprocess(array):
             global image_array
             image_array = array
-        """
 
         print 'Options; %s' % options
         level = Level(level_file=options['level-file'])
-        map_image_size = ((abs(level.level_size['x_max']) + abs(level.level_size['x_min']) + 1) * Level.chunk_size_X, (abs(level.level_size['z_max']) + abs(level.level_size['z_min']) + 1) * Level.chunk_size_Z)
-        #image_array = init_mmap(map_image_size)
-        image_array = shmem.create((map_image_size[1], map_image_size[0], 3), dtype=numpy.uint8)
-        image_array[:] = (255,255,255)
-
+        map_image_size = (
+            (abs(level.level_size['x_max']) + abs(level.level_size['x_min']) + 1) * Level.chunk_size_X,
+            (abs(level.level_size['z_max']) + abs(level.level_size['z_min']) + 1) * Level.chunk_size_Z
+        )
+        image_array = init_image_array(map_image_size)
         pool = multiprocessing.Pool(options['processes'], _init_multiprocess, (image_array,))
+            # (image_array,) for multi-process init arg is to force it to be a single argument instead of auto-expanding
         pool.map(render_modes[options['render-mode']], map(_get_chunk_args, level.chunk_files), level.chunk_count/options['processes'])
         try:
             Image.fromarray(image_array).save(options['output-file'])
@@ -224,14 +235,14 @@ if __name__ == '__main__':
             print 'Failed to save image'
 
     def usage():
-        print """%s: [options] path/to/world/level.dat
+        print """Usage: %s [options] path/to/world/level.dat
     General Options:
         -o|--output-file <filename>
             The filename of the resulting image. Should end with ".png"
             default: map.png
         -r|--render-mode <%s>
             The method for rendering the map image, currently only supports "overview"
-            default: overview
+            default: overhead
         -v|--verbose
             Output progress and other messages
             default: off (quiet)
