@@ -236,8 +236,11 @@ if __name__ == '__main__':
         pool = multiprocessing.Pool(options['processes'], _init_multiprocess, (image_array,))
         pool.map(render_modes[options['render-mode']], map(_get_chunk_args, level.chunk_files), level.chunk_count/options['processes'])
         try:
+            image = Image.new('RGBA', map_image_size, (255,255,255,255))
             for y in range(Level.chunk_size_Y):
-                Image.fromarray(image_array[y], 'RGBA').save('tmp/%s-%s' % (y, options['output-file']))
+                slice = Image.fromarray(image_array[y], 'RGBA')
+                image = Image.composite(slice, image, slice)
+            image.save('composite-%s' % options['output-file'])
         except Exception, err:
             print 'Failed to save image: %s' % err
 
