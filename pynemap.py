@@ -14,71 +14,96 @@ class LevelException(Exception):
     def __str__(self):
         return self.msg
 
-image_array_global = None
-
 class Level(object):
     base_block_colors = dict({
-        1:(120,120,120),
-        2:(117,176,73),
-        3:(134,96,67),
-        4:(115,115,115),
-        5:(157,128,79),
-        6:(120,120,120),
-        7:(84,84,84),
-        8:(0,0,255),
-        9:(0,0,255),
-        10:(255,90,0),
-        11:(255,90,0),
-        12:(228,228,149),
-        13:(136,126,126),
-        14:(143,140,125),
-        15:(136,130,127),
-        16:(115,115,115),
-        17:(102,81,51),
-        18:(0,255,0),
-        20:(255,255,255),
-        35:(222,222,222),
-        38:(255,0,0),
-        37:(255,255,0),
-        41:(231,165,45),
-        42:(191,191,191),
-        43:(200,200,200),
-        44:(200,200,200),
-        45:(170,86,62),
-        46:(160,83,65),
-        49:(26,11,43),
-        50:(245,220,50),
-        51:(255,170,30),
-        52:(245,220,50),
-        53:(157,128,79),
-        54:(125,91,38),
-        55:(245,220,50),
-        56:(129,140,143),
-        57:(45,166,152),
-        58:(114,88,56),
-        59:(146,192,0),
-        60:(95,58,30),
-        61:(96,96,96),
-        62:(96,96,96),
-        63:(111,91,54),
-        64:(136,109,67),
-        65:(181,140,64),
-        66:(150,134,102),
-        67:(115,115,115),
-        71:(191,191,191),
-        73:(131,107,107),
-        74:(131,107,107),
-        75:(181,140,64),
-        76:(255,0,0),
-        78:(255,255,255),
-        79:(83,113,163),
-        80:(250,250,250),
-        81:(25,120,25),
-        82:(151,157,169),
-        83:(193,234,150),
-        83:(100,67,50)
+        0:(255,255,255,0),          #air
+        1:(120,120,120,255),        #stone
+        2:(117,176,73,255),         #grass
+        3:(134,96,67,255),          #dirt
+        4:(115,115,115,255),        #cobblestone
+        5:(157,128,79,255),         #wood (planks)
+        6:(120,120,120,0),          #sapling
+        7:(84,84,84,255),           #adminium
+        8:(38,92,255,51),           #water (flowing?)
+        9:(38,92,255,51),           #water (source)
+        10:(255,90,0,255),          #lava (flowing?)
+        11:(255,90,0,255),          #lava (source)
+        12:(218,210,158,255),       #sand
+        13:(136,126,126,255),       #gravel
+        14:(143,140,125,255),       #gold ore
+        15:(136,130,127,255),       #iron ore
+        16:(115,115,115,255),       #coal ore
+        17:(102,81,51,255),         #log
+        18:(60,192,41,100),         #leaves
+        19:(247,232,43,255),        #sponge
+        20:(255,255,255,64),        #glass
+        21:(207,24,24,255),         #red cloth
+        22:(234,140,15,255),        #orange cloth
+        23:(242,231,6,255),         #yellow cloth
+        24:(45,204,101,255),        #lime cloth
+        25:(68,194,54,255),         #green cloth
+        26:(94,208,191,255),        #aqua cloth
+        27:(111,149,251,255),       #cyan cloth
+        28:(61,45,255,255),         #blue cloth
+        29:(167,41,250,255),        #purple cloth
+        30:(122,112,250,255),       #indigo cloth
+        31:(193,51,240,255),        #violet cloth
+        32:(249,43,162,255),        #magenta cloth
+        33:(255,106,252,255),       #pink cloth
+        34:(0,0,0,255),             #black cloth
+        35:(222,222,222,255),       #white cloth
+        36:(222,222,222,255),       #white cloth
+        37:(255,255,0,255),         #yellow flower
+        38:(255,0,0,255),           #red flower
+        39:(193,168,108,127),       #brown mushroom
+        40:(255,0,0,127),           #red mushroom
+        41:(231,165,45,255),        #gold block
+        42:(191,191,191,255),       #iron block
+        43:(200,200,200,255),       #double stair
+        44:(200,200,200,255),       #stair
+        45:(170,86,62,255),         #brick
+        46:(160,83,65,255),         #tnt
+        47:(157,128,79,255),        #bookcase
+        48:(115,115,115,255),       #mossy cobblestone
+        49:(26,11,43,255),          #obsidian
+        50:(245,220,50,200),        #torch
+        51:(255,170,30,200),        #fire
+        52:(245,220,50,255),        #mob spawner
+        53:(157,128,79,255),        #wooden stairs
+        54:(125,91,38,255),         #chest
+        55:(245,220,50,255),        #redstone wire
+        56:(129,140,143,255),       #diamond ore
+        57:(45,166,152,255),        #diamond block
+        58:(114,88,56,255),         #workbench
+        59:(146,192,0,255),         #crops
+        60:(95,58,30,255),          #tilled dirt
+        61:(96,96,96,255),          #furnace
+        62:(96,96,96,255),          #lit furnace
+        63:(111,91,54,255),         #sign post
+        64:(136,109,67,255),        #wooden door
+        65:(181,140,64,32),         #ladder
+        66:(150,134,102,180),       #minecart rail
+        67:(115,115,115,255),       #stone stairs
+        68:(111,91,54,255),         #sign
+        69:(111,91,54,200),         #lever
+        70:(120,120,120,255),       #stone pressure plate
+        71:(191,191,191,255),       #iron door
+        72:(157,128,79,255),        #wooden pressure plate
+        73:(131,107,107,255),       #redstone ore
+        74:(131,107,107,255),       #lit redstone ore
+        75:(181,140,64,32),         #redstone torch (off)
+        76:(255,0,0,200),           #redstone torch (on)
+        77:(120,120,120,63),        #stone button
+        78:(255,255,255,255),       #snow
+        79:(83,113,163,51),         #ice
+        80:(250,250,250,255),       #snow block
+        81:(25,120,25,255),         #cactus
+        82:(151,157,169,255),       #clay
+        83:(193,234,150,255),       #reeds
+        84:(107,71,50,255),         #jukebox
+        85:(157,128,79,191),        #fence
     })
-    base_block_colors_n = numpy.array([base_block_colors.get(color, (255,255,255)) for color in range(255)], dtype=numpy.uint8)
+    base_block_colors_array = numpy.array([base_block_colors.get(color, (255,255,255,0)) for color in range(255)], dtype=numpy.uint8)
     chunk_size_X = 16
     chunk_size_Z = 16
     chunk_size_Y = 128
@@ -119,11 +144,6 @@ class Level(object):
     def __str__(self):
         return 'Name: %s, Chunks: %i, Size: %s' % (os.path.basename(self.level_dir), self.chunk_count, str(self.level_size))
 
-def _init_multiprocess(array):
-    global image_array_global
-    image_array_global = array
-
-
 def render_overhead_chunk((map_size, chunk_file)):
     map_chunk_offset_X = abs(map_size['x_min'])
     map_chunk_offset_Z = abs(map_size['z_min'])
@@ -136,17 +156,18 @@ def render_overhead_chunk((map_size, chunk_file)):
 
     try:
         blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(16, 16, 128)
-        tops = [z[z.nonzero()][-1] for x in blocks for z in x]
-        colors = Level.base_block_colors_n[tops].reshape(16, 16, 3)
-
-        global image_array_global
-        image_array_global[(map_chunk_offset_Z+chunk_pos_Z)*16 : (map_chunk_offset_Z+chunk_pos_Z)*16+16,
-                    (map_chunk_offset_X+chunk_pos_X)*16 : (map_chunk_offset_X+chunk_pos_X)*16+16] = colors.swapaxes(0, 1)
+        #tops = [z[z.nonzero()][-1] for x in blocks for z in x]
+        #colors = Level.base_block_colors_array[tops].reshape(16, 16, 3)
+        for y in range(Level.chunk_size_Y):
+            slice = [z[y]  for x in blocks for z in x]
+            colors = Level.base_block_colors_array[slice].reshape(16, 16, 4)
+            image_array[y][(map_chunk_offset_Z+chunk_pos_Z)*16 : (map_chunk_offset_Z+chunk_pos_Z)*16+16,
+                        (map_chunk_offset_X+chunk_pos_X)*16 : (map_chunk_offset_X+chunk_pos_X)*16+16] = colors.swapaxes(0, 1)
     except Exception, err:
         print 'Failed chunk %s: %s' % (str((chunk_pos_X, chunk_pos_Z)), err)
 
-def init_mmap(map_image_size, default_color=(255,255,255)):
-    image_array = shmem.create((map_image_size[1], map_image_size[0], 3), dtype=numpy.uint8)
+def init_mmap(map_image_size, default_color=(255,255,255,0)):
+    image_array = shmem.create((Level.chunk_size_Y, map_image_size[1], map_image_size[0], 4), dtype=numpy.uint8)
     image_array[:] = default_color
     return image_array
 
@@ -203,25 +224,22 @@ if __name__ == '__main__':
         def _get_chunk_args(chunk_file):
             return (level.level_size, chunk_file)
 
-        """
         def _init_multiprocess(array):
             global image_array
             image_array = array
-        """
 
         print 'Options; %s' % options
         level = Level(level_file=options['level-file'])
         map_image_size = ((abs(level.level_size['x_max']) + abs(level.level_size['x_min']) + 1) * Level.chunk_size_X, (abs(level.level_size['z_max']) + abs(level.level_size['z_min']) + 1) * Level.chunk_size_Z)
-        #image_array = init_mmap(map_image_size)
-        image_array = shmem.create((map_image_size[1], map_image_size[0], 3), dtype=numpy.uint8)
-        image_array[:] = (255,255,255)
+        image_array = init_mmap(map_image_size)
 
         pool = multiprocessing.Pool(options['processes'], _init_multiprocess, (image_array,))
         pool.map(render_modes[options['render-mode']], map(_get_chunk_args, level.chunk_files), level.chunk_count/options['processes'])
         try:
-            Image.fromarray(image_array).save(options['output-file'])
-        except:
-            print 'Failed to save image'
+            for y in range(Level.chunk_size_Y):
+                Image.fromarray(image_array[y], 'RGBA').save('tmp/%s-%s' % (y, options['output-file']))
+        except Exception, err:
+            print 'Failed to save image: %s' % err
 
     def usage():
         print """%s: [options] path/to/world/level.dat
