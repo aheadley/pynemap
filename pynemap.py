@@ -158,7 +158,7 @@ def render_overhead_chunk((map_size, chunk_file)):
         blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(16, 16, 128)
         #tops = [z[z.nonzero()][-1] for x in blocks for z in x]
         #colors = Level.base_block_colors_array[tops].reshape(16, 16, 3)
-        for y in range(Level.chunk_size_Y):
+        for y in range(Level.chunk_size_Y-127):
             slice = [z[y]  for x in blocks for z in x]
             colors = Level.base_block_colors_array[slice].reshape(16, 16, 4)
             image_array[y][(map_chunk_offset_Z+chunk_pos_Z)*16 : (map_chunk_offset_Z+chunk_pos_Z)*16+16,
@@ -170,6 +170,17 @@ def init_mmap(map_image_size, default_color=(255,255,255,0)):
     image_array = shmem.create((Level.chunk_size_Y, map_image_size[1], map_image_size[0], 4), dtype=numpy.uint8)
     image_array[:] = default_color
     return image_array
+
+def overlay_pixel(src, dest):
+    try:
+        return (
+            (src[3] * src[0] * dest[3])/255**2 + (src[0] * (255 - dest[3]))/255 + (dest[0] * dest[3] * (255 - src[3]))/255**2,
+            (src[3] * src[1] * dest[3])/255**2 + (src[1] * (255 - dest[3]))/255 + (dest[1] * dest[3] * (255 - src[3]))/255**2,
+            (src[3] * src[2] * dest[3])/255**2 + (src[2] * (255 - dest[3]))/255 + (dest[2] * dest[3] * (255 - src[3]))/255**2,
+            (src[3] * dest[3])/255 + (src[3] * (255 - dest[3]))/255 + (dest[3] * (255 - src[3])/255)
+        )
+    except:
+        return src
 
 render_modes = dict({
     'overhead':render_overhead_chunk
@@ -235,12 +246,17 @@ if __name__ == '__main__':
 
         pool = multiprocessing.Pool(options['processes'], _init_multiprocess, (image_array,))
         pool.map(render_modes[options['render-mode']], map(_get_chunk_args, level.chunk_files), level.chunk_count/options['processes'])
+        print 'Compositing...'
+        image = numpy.array((map_image_size[1], map_image_size[0], 4), dtype=numpy.uint8)
+        for y in range(Level.chunk_size_Y-127):
+            try:
+                slice = image_array[y]
+                image = overlay_pixel(slice, image)
+            except Exception, err:
+                print 'Failed overlaying slice %i: %s' % (y,err)
         try:
-            image = Image.new('RGBA', map_image_size, (255,255,255,255))
-            for y in range(Level.chunk_size_Y):
-                slice = Image.fromarray(image_array[y], 'RGBA')
-                image = Image.composite(slice, image, slice)
-            image.save('composite-%s' % options['output-file'])
+            #Image.fromarray(image).save('composite-%s' % options['output-file'])
+            print image
         except Exception, err:
             print 'Failed to save image: %s' % err
 
