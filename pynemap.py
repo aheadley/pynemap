@@ -2,9 +2,6 @@
 
 import glob, os
 import nbt
-import Image, ImageDraw
-import progressbar
-import sys, logging, logging.handlers
 import numpy, shmem
 import multiprocessing
 
@@ -117,10 +114,9 @@ class Level(object):
             #should probably do something more worthwhile here
             raise err
         self.level_dir = os.path.dirname(level_file)
-        self.chunk_files = glob.glob(os.path.join(self.level_dir, '*', '*', '*.dat'))
         self.chunk_files = sorted(
             sorted(
-                glob.glob(os.path.join(self.level_dir, '*', '*', '*.dat')),
+                glob.glob(os.path.join(self.level_dir, '*', '*', 'c.*.*.dat')),
                 key=lambda chunk_file: int(os.path.basename(chunk_file).split('.')[1],36)
             ),
             key=lambda chunk_file: int(os.path.basename(chunk_file).split('.')[2],36)
@@ -139,17 +135,14 @@ class Level(object):
         self.level_size['z_min'] = min(chunks_zpos)
         self.level_size['z_max'] = max(chunks_zpos)
 
-        assert sum(map(abs, self.level_size.values())) <= self.chunk_count
-
-        print str(self)
-
+        assert (abs(self.level_size['x_min']) + self.level_size['x_max']) * (abs(self.level_size['z_min']) + self.level_size['z_max']) >= self.chunk_count
+        
     def __str__(self):
         return 'Name: %s, Chunks: %i, Size: %s' % (os.path.basename(self.level_dir), self.chunk_count, str(self.level_size))
 
-def render_overhead_chunk((map_size, chunk_file)):
+def render_overhead_chunk((chunk_file, map_size)):
     map_chunk_offset_X = abs(map_size['x_min'])
     map_chunk_offset_Z = abs(map_size['z_min'])
-    map_image_size = ((abs(map_size['x_max']) + map_chunk_offset_X + 1) * Level.chunk_size_X, (abs(map_size['z_max']) + map_chunk_offset_Z + 1) * Level.chunk_size_Z)
 
     chunk = nbt.NBTFile(chunk_file, 'rb')
 
@@ -158,8 +151,6 @@ def render_overhead_chunk((map_size, chunk_file)):
 
     try:
         blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(16, 16, 128)
-        #tops = [z[z.nonzero()][-1] for x in blocks for z in x]
-        #colors = Level.base_block_colors_array[tops].reshape(16, 16, 3)
         for y in range(Level.chunk_size_Y):
             slice = [z[y]  for x in blocks for z in x]
             colors = Level.base_block_colors_array[slice].reshape(16, 16, 4)
@@ -168,10 +159,9 @@ def render_overhead_chunk((map_size, chunk_file)):
     except Exception, err:
         print 'Failed chunk %s: %s' % (str((chunk_pos_X, chunk_pos_Z)), err)
 
-def render_oblique_chunk((map_size, chunk_file)):
+def render_oblique_chunk((chunk_file, map_size)):
     map_chunk_offset_X = abs(map_size['x_min'])
     map_chunk_offset_Z = abs(map_size['z_min'])
-    map_image_size = ((abs(map_size['x_max']) + map_chunk_offset_X + 1) * Level.chunk_size_X, (abs(map_size['z_max']) + map_chunk_offset_Z + 2) * Level.chunk_size_Z)
 
     chunk = nbt.NBTFile(chunk_file, 'rb')
 
@@ -189,18 +179,17 @@ def render_oblique_chunk((map_size, chunk_file)):
         print 'Failed chunk %s: %s' % (str((chunk_pos_X, chunk_pos_Z)), err)
 
 
-def init_mmap(map_image_size, default_color=(255,255,255,0)):
+def init_image_array(map_image_size, default_color=(255,255,255,0)):
     image_array = shmem.create((Level.chunk_size_Y, map_image_size[1], map_image_size[0], 4), dtype=numpy.uint8)
     image_array[:] = default_color
     return image_array
 
 def overlay_pixel(src, dest):
-    new_pixel = numpy.array(
+    return numpy.array(
         [(src[3] * src[0] * dest[3])/255**2 + (src[0] * (255 - dest[3]))/255 + (dest[0] * dest[3] * (255 - src[3]))/255**2,
         (src[3] * src[1] * dest[3])/255**2 + (src[1] * (255 - dest[3]))/255 + (dest[1] * dest[3] * (255 - src[3]))/255**2,
         (src[3] * src[2] * dest[3])/255**2 + (src[2] * (255 - dest[3]))/255 + (dest[2] * dest[3] * (255 - src[3]))/255**2,
         (src[3] * dest[3])/255 + (src[3] * (255 - dest[3]))/255 + (dest[3] * (255 - src[3])/255)], dtype=numpy.uint8)
-    return new_pixel
 
 render_modes = dict({
     'overhead':render_overhead_chunk,
@@ -209,19 +198,25 @@ render_modes = dict({
 
 if __name__ == '__main__':
     import getopt, sys
+    import Image
 
     def main():
         short_options = 'o:r:v'
-        long_options = ['output-file=', 'render-mode=', 'only-blocks=', 'processes=', 'verbose', 'use-alpha']
+        long_options = [
+            'output-file=',
+            'render-mode=',
+            'processes=',
+            'verbose',
+        ]
         options = dict({
             'level-file':None,
             'render-mode':'overhead',
             'output-file':'map.png',
             'verbose':False,
-            'use-alpha':False,
-            'processes':multiprocessing.cpu_count()
+            'processes':multiprocessing.cpu_count(),
         })
-        render_options = dict({})
+        render_options = dict({
+        })
 
         try:
             opts, args = getopt.gnu_getopt(sys.argv[1:], short_options, long_options)
@@ -240,10 +235,6 @@ if __name__ == '__main__':
                             (opt, arg))
                 elif opt in ('-v', '--verbose'):
                     options['verbose'] = True
-                elif opt == '--use-alpha':
-                    options['use-alpha'] = True
-                elif opt == '--only-blocks':
-                    render_options['selected-blocks'] = arg.split(',')
                 elif opt == '--processes':
                     options['processes'] = max(int(arg), 1)
                 else:
@@ -254,20 +245,29 @@ if __name__ == '__main__':
             return None
 
         def _get_chunk_args(chunk_file):
-            return (level.level_size, chunk_file)
+            return (chunk_file, level.level_size)
 
         def _init_multiprocess(array):
             global image_array
             image_array = array
 
-        print 'Options; %s' % options
         level = Level(level_file=options['level-file'])
-        map_image_size = ((abs(level.level_size['x_max']) + abs(level.level_size['x_min']) + 1) * Level.chunk_size_X, (abs(level.level_size['z_max']) + abs(level.level_size['z_min']) + 1+1) * Level.chunk_size_Z)
-        image_array = init_mmap(map_image_size)
+        if options['verbose']: print level
+
+        if options['render-mode'] == 'oblique':
+            map_image_size_addon = (0,Level.chunk_size_Z)
+        else:
+            map_image_size_addon = (0,0)
+        map_image_size = (
+            (level.level_size['x_max'] + abs(level.level_size['x_min']) + 1) * Level.chunk_size_X + map_image_size_addon[0],
+            (level.level_size['z_max'] + abs(level.level_size['z_min']) + 1) * Level.chunk_size_Z + map_image_size_addon[1],
+        )
+        image_array = init_image_array(map_image_size)
 
         pool = multiprocessing.Pool(options['processes'], _init_multiprocess, (image_array,))
+        if options['verbose']: print 'Rendering...'
         pool.map(render_modes[options['render-mode']], map(_get_chunk_args, level.chunk_files), level.chunk_count/options['processes'])
-        print 'Compositing...'
+        if options['verbose']: print 'Compositing...'
         if not os.path.isdir('tmp'):
             os.mkdir('tmp')
         Image.new('RGBA', map_image_size, (0,0,0,0)).save('composite-map.png')
@@ -290,15 +290,6 @@ if __name__ == '__main__':
             default: off (quiet)
         --processes <count>
             Set the number of render processes
-            default: # of cpu cores
-        --use-alpha
-            *NYI* Use transparency for nicer looking maps
-            default: no alpha channel
-    Render Options:
-        *blocks*:
-            --only-blocks <block[,block[,block]]>
-                Comma separated list of (dec) block ids to render
-            --overlayed
-                *NYI* Overlay onto overhead map""" % \
+            default: # of cpu cores""" % \
         (sys.argv[0], render_modes.keys())
     main()
