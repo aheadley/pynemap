@@ -12,7 +12,7 @@ class LevelException(Exception):
         return self.msg
 
 class Level(object):
-    base_block_colors = dict({
+    _base_block_colors = dict({
         0:(255,255,255,0),          #air
         1:(120,120,120,255),        #stone
         2:(117,176,73,255),         #grass
@@ -22,7 +22,7 @@ class Level(object):
         6:(120,120,120,0),          #sapling
         7:(84,84,84,255),           #adminium
         8:(38,92,255,51),           #water (flowing?)
-        9:(38,92,255,51),           #water (source)
+        9:(38,92,255,100),           #water (source)
         10:(255,90,0,255),          #lava (flowing?)
         11:(255,90,0,255),          #lava (source)
         12:(218,210,158,255),       #sand
@@ -100,7 +100,8 @@ class Level(object):
         84:(107,71,50,255),         #jukebox
         85:(157,128,79,191),        #fence
     })
-    base_block_colors_array = numpy.array([base_block_colors.get(color, (255,255,255,0)) for color in range(255)], dtype=numpy.uint8)
+    base_block_colors = numpy.array([_base_block_colors.get(color, (255,255,255,0)) for color in range(255)], dtype=numpy.uint8)
+    color_depth = 4
     chunk_size_X = 16
     chunk_size_Z = 16
     chunk_size_Y = 128
@@ -126,7 +127,7 @@ class Level(object):
             'x_min':0,
             'x_max':0,
             'z_min':0,
-            'z_max':0
+            'z_max':0,
         })
         chunks_xpos = map(lambda chunk_file: int(os.path.basename(chunk_file).split('.')[1],36), self.chunk_files)
         chunks_zpos = map(lambda chunk_file: int(os.path.basename(chunk_file).split('.')[2],36), self.chunk_files)
@@ -150,12 +151,19 @@ def render_overhead_chunk((chunk_file, map_size)):
     chunk_pos_Z = chunk['Level']['zPos'].value
 
     try:
-        blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(16, 16, 128)
+        blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(Level.chunk_size_X, Level.chunk_size_Z, Level.chunk_size_Y)
         for y in range(Level.chunk_size_Y):
-            slice = [z[y]  for x in blocks for z in x]
-            colors = Level.base_block_colors_array[slice].reshape(16, 16, 4)
-            image_array[y][(map_chunk_offset_Z+chunk_pos_Z)*16 : (map_chunk_offset_Z+chunk_pos_Z)*16+16,
-                        (map_chunk_offset_X+chunk_pos_X)*16 : (map_chunk_offset_X+chunk_pos_X)*16+16] = colors.swapaxes(0, 1)
+            colors = Level.base_block_colors[blocks[...,y]].reshape(Level.chunk_size_X, Level.chunk_size_Z, Level.color_depth)
+            image_array[y][(map_chunk_offset_Z + chunk_pos_Z) * Level.chunk_size_Z : (map_chunk_offset_Z + chunk_pos_Z + 1) * Level.chunk_size_Z,
+                (map_chunk_offset_X + chunk_pos_X) * Level.chunk_size_X : (map_chunk_offset_X + chunk_pos_X + 1) * Level.chunk_size_X] = colors.swapaxes(0, 1)
+            """
+            image_array[(map_chunk_offset_Z + chunk_pos_Z) * Level.chunk_size_Z : (map_chunk_offset_Z + chunk_pos_Z + 1) * Level.chunk_size_Z,
+                (map_chunk_offset_X + chunk_pos_X) * Level.chunk_size_X : (map_chunk_offset_X + chunk_pos_X + 1) * Level.chunk_size_X] = overlay_pixel(
+                    colors.swapaxes(0, 1),
+                    image_array[y][(map_chunk_offset_Z + chunk_pos_Z) * Level.chunk_size_Z : (map_chunk_offset_Z + chunk_pos_Z + 1) * Level.chunk_size_Z,
+                        (map_chunk_offset_X + chunk_pos_X) * Level.chunk_size_X : (map_chunk_offset_X + chunk_pos_X + 1) * Level.chunk_size_X])
+            """
+
     except Exception, err:
         print 'Failed chunk %s: %s' % (str((chunk_pos_X, chunk_pos_Z)), err)
 
@@ -169,18 +177,20 @@ def render_oblique_chunk((chunk_file, map_size)):
     chunk_pos_Z = chunk['Level']['zPos'].value
 
     try:
-        blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(16, 16, 128)
+        blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(Level.chunk_size_X, Level.chunk_size_Z, Level.chunk_size_Y)
         for y in range(Level.chunk_size_Y):
-            slice = [z[y]  for x in blocks for z in x]
-            colors = Level.base_block_colors_array[slice].reshape(16, 16, 4)
-            image_array[y][(map_chunk_offset_Z+chunk_pos_Z)*16-y : (map_chunk_offset_Z+chunk_pos_Z)*16+16-y,
-                        (map_chunk_offset_X+chunk_pos_X)*16 : (map_chunk_offset_X+chunk_pos_X)*16+16] = colors.swapaxes(0, 1)
+            colors = Level.base_block_colors[blocks[...,y]].reshape(Level.chunk_size_X, Level.chunk_size_Z, Level.color_depth)
+            shaded_colors = colors >> 1
+            image_array[y][(map_chunk_offset_Z + chunk_pos_Z) * Level.chunk_size_Z - y - 1: (map_chunk_offset_Z + chunk_pos_Z + 1) * Level.chunk_size_Z - y - 1,
+                (map_chunk_offset_X + chunk_pos_X) * Level.chunk_size_X : (map_chunk_offset_X + chunk_pos_X + 1) * Level.chunk_size_X] = shaded_colors.swapaxes(0, 1)
+            image_array[y][(map_chunk_offset_Z + chunk_pos_Z) * Level.chunk_size_Z - y : (map_chunk_offset_Z + chunk_pos_Z + 1) * Level.chunk_size_Z - y,
+                (map_chunk_offset_X + chunk_pos_X) * Level.chunk_size_X : (map_chunk_offset_X + chunk_pos_X + 1) * Level.chunk_size_X] = colors.swapaxes(0, 1)
     except Exception, err:
         print 'Failed chunk %s: %s' % (str((chunk_pos_X, chunk_pos_Z)), err)
 
 
 def init_image_array(map_image_size, default_color=(255,255,255,0)):
-    image_array = shmem.create((Level.chunk_size_Y, map_image_size[1], map_image_size[0], 4), dtype=numpy.uint8)
+    image_array = shmem.create((Level.chunk_size_Y, map_image_size[1], map_image_size[0], Level.color_depth), dtype=numpy.uint8)
     image_array[:] = default_color
     return image_array
 
@@ -274,7 +284,8 @@ if __name__ == '__main__':
         for y in range(Level.chunk_size_Y):
             #this is a temporary hack until I figure out how to properly overlay images in Python itself
             Image.fromarray(image_array[y], 'RGBA').save('tmp/layer-%i.png' % y)
-            os.system('composite -compose over tmp/layer-%i.png composite-map.png composite-map.png' % y)
+
+        os.system('convert -flatten $(ls tmp/layer-*.png | sort -V) composite-%s' % (options['output-file']))
 
     def usage():
         print """%s: [options] path/to/world/level.dat
