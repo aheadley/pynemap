@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-import glob, os.path
+import glob, os
 import nbt
 import Image, ImageDraw
 import progressbar
@@ -139,6 +139,8 @@ class Level(object):
         self.level_size['z_min'] = min(chunks_zpos)
         self.level_size['z_max'] = max(chunks_zpos)
 
+        assert sum(map(abs, self.level_size.values())) <= self.chunk_count
+
         print str(self)
 
     def __str__(self):
@@ -158,7 +160,7 @@ def render_overhead_chunk((map_size, chunk_file)):
         blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(16, 16, 128)
         #tops = [z[z.nonzero()][-1] for x in blocks for z in x]
         #colors = Level.base_block_colors_array[tops].reshape(16, 16, 3)
-        for y in range(Level.chunk_size_Y-127):
+        for y in range(Level.chunk_size_Y):
             slice = [z[y]  for x in blocks for z in x]
             colors = Level.base_block_colors_array[slice].reshape(16, 16, 4)
             image_array[y][(map_chunk_offset_Z+chunk_pos_Z)*16 : (map_chunk_offset_Z+chunk_pos_Z)*16+16,
@@ -166,24 +168,43 @@ def render_overhead_chunk((map_size, chunk_file)):
     except Exception, err:
         print 'Failed chunk %s: %s' % (str((chunk_pos_X, chunk_pos_Z)), err)
 
+def render_oblique_chunk((map_size, chunk_file)):
+    map_chunk_offset_X = abs(map_size['x_min'])
+    map_chunk_offset_Z = abs(map_size['z_min'])
+    map_image_size = ((abs(map_size['x_max']) + map_chunk_offset_X + 1) * Level.chunk_size_X, (abs(map_size['z_max']) + map_chunk_offset_Z + 2) * Level.chunk_size_Z)
+
+    chunk = nbt.NBTFile(chunk_file, 'rb')
+
+    chunk_pos_X = chunk['Level']['xPos'].value
+    chunk_pos_Z = chunk['Level']['zPos'].value
+
+    try:
+        blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(16, 16, 128)
+        for y in range(Level.chunk_size_Y):
+            slice = [z[y]  for x in blocks for z in x]
+            colors = Level.base_block_colors_array[slice].reshape(16, 16, 4)
+            image_array[y][(map_chunk_offset_Z+chunk_pos_Z)*16-y : (map_chunk_offset_Z+chunk_pos_Z)*16+16-y,
+                        (map_chunk_offset_X+chunk_pos_X)*16 : (map_chunk_offset_X+chunk_pos_X)*16+16] = colors.swapaxes(0, 1)
+    except Exception, err:
+        print 'Failed chunk %s: %s' % (str((chunk_pos_X, chunk_pos_Z)), err)
+
+
 def init_mmap(map_image_size, default_color=(255,255,255,0)):
     image_array = shmem.create((Level.chunk_size_Y, map_image_size[1], map_image_size[0], 4), dtype=numpy.uint8)
     image_array[:] = default_color
     return image_array
 
 def overlay_pixel(src, dest):
-    try:
-        return (
-            (src[3] * src[0] * dest[3])/255**2 + (src[0] * (255 - dest[3]))/255 + (dest[0] * dest[3] * (255 - src[3]))/255**2,
-            (src[3] * src[1] * dest[3])/255**2 + (src[1] * (255 - dest[3]))/255 + (dest[1] * dest[3] * (255 - src[3]))/255**2,
-            (src[3] * src[2] * dest[3])/255**2 + (src[2] * (255 - dest[3]))/255 + (dest[2] * dest[3] * (255 - src[3]))/255**2,
-            (src[3] * dest[3])/255 + (src[3] * (255 - dest[3]))/255 + (dest[3] * (255 - src[3])/255)
-        )
-    except:
-        return src
+    new_pixel = numpy.array(
+        [(src[3] * src[0] * dest[3])/255**2 + (src[0] * (255 - dest[3]))/255 + (dest[0] * dest[3] * (255 - src[3]))/255**2,
+        (src[3] * src[1] * dest[3])/255**2 + (src[1] * (255 - dest[3]))/255 + (dest[1] * dest[3] * (255 - src[3]))/255**2,
+        (src[3] * src[2] * dest[3])/255**2 + (src[2] * (255 - dest[3]))/255 + (dest[2] * dest[3] * (255 - src[3]))/255**2,
+        (src[3] * dest[3])/255 + (src[3] * (255 - dest[3]))/255 + (dest[3] * (255 - src[3])/255)], dtype=numpy.uint8)
+    return new_pixel
 
 render_modes = dict({
-    'overhead':render_overhead_chunk
+    'overhead':render_overhead_chunk,
+    'oblique':render_oblique_chunk,
 })
 
 if __name__ == '__main__':
@@ -241,24 +262,19 @@ if __name__ == '__main__':
 
         print 'Options; %s' % options
         level = Level(level_file=options['level-file'])
-        map_image_size = ((abs(level.level_size['x_max']) + abs(level.level_size['x_min']) + 1) * Level.chunk_size_X, (abs(level.level_size['z_max']) + abs(level.level_size['z_min']) + 1) * Level.chunk_size_Z)
+        map_image_size = ((abs(level.level_size['x_max']) + abs(level.level_size['x_min']) + 1) * Level.chunk_size_X, (abs(level.level_size['z_max']) + abs(level.level_size['z_min']) + 1+1) * Level.chunk_size_Z)
         image_array = init_mmap(map_image_size)
 
         pool = multiprocessing.Pool(options['processes'], _init_multiprocess, (image_array,))
         pool.map(render_modes[options['render-mode']], map(_get_chunk_args, level.chunk_files), level.chunk_count/options['processes'])
         print 'Compositing...'
-        image = numpy.array((map_image_size[1], map_image_size[0], 4), dtype=numpy.uint8)
-        for y in range(Level.chunk_size_Y-127):
-            try:
-                slice = image_array[y]
-                image = overlay_pixel(slice, image)
-            except Exception, err:
-                print 'Failed overlaying slice %i: %s' % (y,err)
-        try:
-            #Image.fromarray(image).save('composite-%s' % options['output-file'])
-            print image
-        except Exception, err:
-            print 'Failed to save image: %s' % err
+        if not os.path.isdir('tmp'):
+            os.mkdir('tmp')
+        Image.new('RGBA', map_image_size, (0,0,0,0)).save('composite-map.png')
+        for y in range(Level.chunk_size_Y):
+            #this is a temporary hack until I figure out how to properly overlay images in Python itself
+            Image.fromarray(image_array[y], 'RGBA').save('tmp/layer-%i.png' % y)
+            os.system('composite -compose over tmp/layer-%i.png composite-map.png composite-map.png' % y)
 
     def usage():
         print """%s: [options] path/to/world/level.dat
