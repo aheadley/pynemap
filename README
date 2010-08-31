@@ -1,59 +1,32 @@
-http://github.com/aheadley/pynemap
-
-For all you SMP server hosts on linux, here is a way to generate map images
-suitable for cronjobs or whatever. It's very rough currently and a bit slower
-than Cartograph. Currently the only rendering mode is a straight top-down view
-("overhead") still pretty rough but faster than it was and with oblique and
-only-certain-blocks rendering modes. Usage is:
-
+pynemap is a script to generate map images for Minecraft, suitable for
+cronjobs or whatever. Apparently works on Windows and OS X. I try to keep
+compatibility with different OSs and Python2.4 but no promises.
+Usage is:
 ./pynemap.py: [options] path/to/world/level.dat
     General Options:
         -o|--output-file <filename>
             The filename of the resulting image. Should end with ".png"
             default: map.png
-        -r|--render-mode <['blocks', 'oblique', 'overhead']>
-            The method for rendering the map image, currently only supports "overview"
-            default: overview
+        -r|--render-mode <['overhead']>
+            The method for rendering the map image
+            default: overhead
         -v|--verbose
             Output progress and other messages
             default: off (quiet)
-        --keep-chunks
-            Keep chunks in loaded in memory, can use *a lot* of memory for large maps
-            default: load chunks one at a time during render
-        --use-alpha
-            *NYI* Use transparency for nicer looking maps
-            default: no alpha channel
-    Render Options:
-        *blocks*:
-            --only-blocks <block[,block[,block]]>
-                Comma separated list of (dec) block ids to render
-            --overlayed
-                *NYI* Overlay onto overhead map
-
+        --processes <count>
+            Set the number of render processes
+            default: # of cpu cores
 
 Note that it requires having the Python Imaging Library (http://www.pythonware.com/products/pil/)
 (probably installed by default on most distros) and progressbar package
 (http://pypi.python.org/pypi/progressbar/) installed already.
 
 Thanks to Cartograph for the block colors and tWoolie for the NBT parser (viewtopic.php?f=25&t=24585)!
+Thanks to various people on minecraftforum.net for help with the coding and whatnot!
 
 Examples of render-modes:
 blocks: don't have one yet
 oblique: http://waysaboutstuff.com/oblique-example.png
 overhead: http://waysaboutstuff.com/overhead-example.png
 
-Current release version:
-
-Code: Select all
-    git clone git://github.com/aheadley/pynemap.git
-    cd pynemap
-    git checkout release-0.1b2
-
-
-Bleeding edge version:
-
-Code: Select all
-    git clone git://github.com/aheadley/pynemap.git
-
-Apparently works on Windows and OS X. I try to keep compatibility with different
-OSs and Python2.4 but no promises.
+Current release version: release-0.1b2
