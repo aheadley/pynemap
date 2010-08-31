@@ -23,7 +23,7 @@ class Level(object):
         6:(120,120,120,0),          #sapling
         7:(84,84,84,255),           #adminium
         8:(38,92,255,51),           #water (flowing?)
-        9:(38,92,255,100),           #water (source)
+        9:(38,92,255,51),           #water (source)
         10:(255,90,0,255),          #lava (flowing?)
         11:(255,90,0,255),          #lava (source)
         12:(218,210,158,255),       #sand
@@ -102,6 +102,7 @@ class Level(object):
         85:(157,128,79,191),        #fence
     })
     base_block_colors = numpy.array([_base_block_colors.get(color, (255,255,255,0)) for color in range(255)], dtype=numpy.uint8)
+    shaded_block_colors = base_block_colors >> 1
     color_depth = 4
     chunk_size_X = 16
     chunk_size_Z = 16
@@ -160,20 +161,26 @@ def render_overhead_chunk((chunk_file, map_size, render_options)):
     except IndexError, err:
         print 'Failed chunk: %s' % err
 
-def render_oblique_chunk((chunk_file, map_size, )):
+def render_oblique_chunk((chunk_file, map_size, render_options)):
     chunk = nbt.NBTFile(chunk_file, 'rb')
     array_offset_X = (abs(map_size['x_min']) + chunk['Level']['xPos'].value) * Level.chunk_size_X
     array_offset_Z = (abs(map_size['z_min']) + chunk['Level']['zPos'].value) * Level.chunk_size_Z
 
     try:
         blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(Level.chunk_size_X, Level.chunk_size_Z, Level.chunk_size_Y)
-        new_chunk_pixels = numpy.zeros((Level.chunk_size_Z, Level.chunk_size_X, Level.color_depth), dtype=numpy.uint16)#.reshape(Level.chunk_size_X, Level.chunk_size_Z, Level.color_depth)
+        new_chunk_pixels = image_array[array_offset_Z : array_offset_Z + Level.chunk_size_Z * 2 + Level.chunk_size_Y,
+            array_offset_X : array_offset_X + Level.chunk_size_X]
 
         for y in range(Level.chunk_size_Y):
             colors = Level.base_block_colors[blocks[...,y]].reshape(Level.chunk_size_X, Level.chunk_size_Z, Level.color_depth)
+            shaded_colors = Level.base_block_colors[blocks[...,y]].reshape(Level.chunk_size_X, Level.chunk_size_Z, Level.color_depth)
             for z,x in itertools.product(*map(xrange, [Level.chunk_size_X, Level.chunk_size_Z])):
-                new_chunk_pixels[z,x] = overlay_pixel(colors[x,z], new_chunk_pixels[z,x])
-        image_array[array_offset_Z : array_offset_Z + Level.chunk_size_Z,
+                try:
+                    new_chunk_pixels[(Level.chunk_size_Y - y) + z, x] = overlay_pixel(colors[x, z], new_chunk_pixels[(Level.chunk_size_Y - y) + z, x])
+                    new_chunk_pixels[(Level.chunk_size_Y - y) + z + 1, x] = overlay_pixel(shaded_colors[x, z], new_chunk_pixels[(Level.chunk_size_Y - y) + z + 1, x])
+                except IndexError:
+                    pass
+        image_array[array_offset_Z : array_offset_Z + Level.chunk_size_Z * 2 + Level.chunk_size_Y,
             array_offset_X : array_offset_X + Level.chunk_size_X] = new_chunk_pixels
     except IndexError, err:
         print 'Failed chunk: %s' % err
@@ -196,7 +203,7 @@ def overlay_pixel(src, dest):
 
 render_modes = dict({
     'overhead':     render_overhead_chunk,
-    'oblique':      render_oblique_chunk,
+    #'oblique':      render_oblique_chunk,
 })
 
 if __name__ == '__main__':
@@ -273,7 +280,7 @@ if __name__ == '__main__':
         pool = multiprocessing.Pool(options['processes'], _init_multiprocess, (image_array,))
         if options['verbose']: print 'Rendering...'
         pool.map(render_modes[options['render-mode']], map(_get_chunk_args, level.chunk_files), level.chunk_count/options['processes'])
-        #for x in range(5): render_overhead_chunk((level.chunk_files[x], level.level_size, render_options))
+        #for x in range(5): render_oblique_chunk((level.chunk_files[x], level.level_size, render_options))
         Image.fromarray(image_array, 'RGBA').save(options['output-file'])
 
     def usage():
@@ -284,7 +291,7 @@ if __name__ == '__main__':
             default: map.png
         -r|--render-mode <%s>
             The method for rendering the map image
-            default: overview
+            default: overhead
         -v|--verbose
             Output progress and other messages
             default: off (quiet)
