@@ -138,7 +138,11 @@ class Level(object):
         self.level_size['z_min'] = min(chunks_zpos)
         self.level_size['z_max'] = max(chunks_zpos)
 
-        assert (abs(self.level_size['x_min']) + self.level_size['x_max']) * (abs(self.level_size['z_min']) + self.level_size['z_max']) >= self.chunk_count
+        # Make sure that the dimensions of the level provide equal or more chunks
+        #  than there are chunk files.
+        assert (abs(self.level_size['x_min']) + 1 + self.level_size['x_max']) * \
+            (abs(self.level_size['z_min']) + 1 + self.level_size['z_max']) >= \
+            self.chunk_count
         
     def __str__(self):
         return 'Name: %s, Chunks: %i, Size: %s' % (os.path.basename(self.level_dir), self.chunk_count, str(self.level_size))
@@ -150,14 +154,14 @@ def render_overhead_chunk((chunk_file, map_size, render_options)):
 
     try:
         blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(Level.chunk_size_X, Level.chunk_size_Z, Level.chunk_size_Y)
-        new_chunk_pixels = numpy.zeros((Level.chunk_size_Z, Level.chunk_size_X, Level.color_depth), dtype=numpy.uint8)
-
-        for y in range(Level.chunk_size_Y):
+        for y in xrange(Level.chunk_size_Y):
             colors = Level.base_block_colors[blocks[...,y]].reshape(Level.chunk_size_X, Level.chunk_size_Z, Level.color_depth)
-            for z,x in itertools.product(*map(xrange, [Level.chunk_size_X, Level.chunk_size_Z])):
-                new_chunk_pixels[z,x] = overlay_pixel(colors[x,z], new_chunk_pixels[z,x])
-        image_array[array_offset_Z : array_offset_Z + Level.chunk_size_Z,
-            array_offset_X : array_offset_X + Level.chunk_size_X] = new_chunk_pixels
+            image_array[array_offset_Z : array_offset_Z + Level.chunk_size_Z,
+                array_offset_X : array_offset_X + Level.chunk_size_X] = overlay_chunk(
+                    colors.swapaxes(0, 1),
+                    image_array[array_offset_Z : array_offset_Z + Level.chunk_size_Z,
+                        array_offset_X : array_offset_X + Level.chunk_size_X])
+        print 'Finished chunk %s' % str((array_offset_X, array_offset_Z))
     except IndexError, err:
         print 'Failed chunk: %s' % err
 
@@ -191,15 +195,65 @@ def init_image_array(map_image_size, default_color=(0,0,0,0)):
     image_array[:] = default_color
     return image_array
 
-def overlay_pixel(src, dest):
-    src = map(int, list(src))
-    dest = map(int, list(dest))
-    return numpy.array([
-        (src[0] * src[3]) / 255 + ((dest[0] * dest[3]) * (255 - src[3])) / 255 ** 2,
-        (src[1] * src[3]) / 255 + ((dest[1] * dest[3]) * (255 - src[3])) / 255 ** 2,
-        (src[2] * src[3]) / 255 + ((dest[2] * dest[3]) * (255 - src[3])) / 255 ** 2,
-        src[3] + dest[3] - (src[3] * dest[3]) / 255,
-    ], dtype=numpy.uint8)
+def overlay_chunk(src_chunk, dest_chunk):
+    # Courtesy of Peter B. (peter.be...ton@gmail.com)
+    chunk = numpy.zeros((Level.chunk_size_Z, Level.chunk_size_X, Level.color_depth), dtype=numpy.uint32)
+    """
+
+    blend( (sL,sA), (dL,dA) ) = t1 + t2 + t3
+
+    t1 = sL * sA *   dA  / (255^2)
+    t2 = dL * dA * (!sA) / (255^2)
+    t3 = sL *      (!dA) /  255
+
+    """
+
+    src_channel_R  = src_chunk[:,:,0].astype(numpy.uint32)
+    dest_channel_R = dest_chunk[:,:,0].astype(numpy.uint32)
+    src_channel_G  = src_chunk[:,:,1].astype(numpy.uint32)
+    dest_channel_G = dest_chunk[:,:,1].astype(numpy.uint32)
+    src_channel_B  = src_chunk[:,:,2].astype(numpy.uint32)
+    dest_channel_B = dest_chunk[:,:,2].astype(numpy.uint32)
+    src_channel_A  = src_chunk[:,:,3].astype(numpy.uint32)
+    dest_channel_A = dest_chunk[:,:,3].astype(numpy.uint32)
+
+    for i, (s,d) in enumerate(zip(
+        (src_channel_R, src_channel_G, src_channel_B),
+        (dest_channel_R, dest_channel_G, dest_channel_B)
+    )):
+        chunk[:,:,i] = (
+            #t1 =  sL * sA *   dA  / (255^2)
+            (s * src_channel_A * dest_channel_A / 65025) +
+            #t2 = dL * dA * (!sA) / (255^2)
+            (d * dest_channel_A * (255 - src_channel_A) / 65025) +
+            #t3 = sL *      (!dA) /  255
+            (s * (255 - dest_channel_A) / 255)
+        )
+    chunk[:,:,3] = (src_channel_A * dest_channel_A) / 255 + \
+        (src_channel_A * (255 - dest_channel_A)) / 255 + \
+        (dest_channel_A * (255 - src_channel_A) / 255)
+
+    return chunk.reshape(Level.chunk_size_Z, Level.chunk_size_X, Level.color_depth).astype(numpy.uint8)
+
+def overlay_pixel(src, dst):
+    pixel = numpy.array([
+        #RED
+        ((src[3] * src[0] * dst[3])/255**2) +
+        ((src[0] * (255 - dst[3]))/255    ) +
+        ((dst[0] * dst[3] * (255 - src[3]))/255**2),
+        #GREEN
+        ((src[3] * src[1] * dst[3])/255**2) +
+        ((src[1] * (255 - dst[3]))/255    ) +
+        ((dst[1] * dst[3] * (255 - src[3]))/255**2),
+        #BLUE
+        ((src[3] * src[2] * dst[3])/255**2) +
+        ((src[2] * (255 - dst[3]))/255    ) +
+        ((dst[2] * dst[3] * (255 - src[3]))/255**2),
+        #ALPHA
+        (src[3] * dst[3]         )/255    + (src[3] * (255 - dst[3]))/255 + (dst[3] * (255 - src[3])/255)
+        ],
+        dtype=numpy.uint8)
+    return pixel
 
 render_modes = dict({
     'overhead':     render_overhead_chunk,
