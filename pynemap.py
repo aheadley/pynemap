@@ -143,7 +143,7 @@ class Level(object):
         assert (abs(self.level_size['x_min']) + 1 + self.level_size['x_max']) * \
             (abs(self.level_size['z_min']) + 1 + self.level_size['z_max']) >= \
             self.chunk_count
-        
+
     def __str__(self):
         return 'Name: %s, Chunks: %i, Size: %s' % (os.path.basename(self.level_dir), self.chunk_count, str(self.level_size))
 
@@ -186,6 +186,30 @@ def render_oblique_chunk((chunk_file, map_size, render_options)):
                     pass
         image_array[array_offset_Z : array_offset_Z + Level.chunk_size_Z * 2 + Level.chunk_size_Y,
             array_offset_X : array_offset_X + Level.chunk_size_X] = new_chunk_pixels
+    except IndexError, err:
+        print 'Failed chunk: %s' % err
+
+def render_topographic_chunk((chunk_file, map_size, render_options)):
+    import topography
+    chunk = nbt.NBTFile(chunk_file, 'rb')
+    array_offset_X = (abs(map_size['x_min']) + chunk['Level']['xPos'].value) * Level.chunk_size_X
+    array_offset_Z = (abs(map_size['z_min']) + chunk['Level']['zPos'].value) * Level.chunk_size_Z
+
+    try:
+        blocks = numpy.fromstring(chunk['Level']['Blocks'].value, dtype=numpy.uint8).reshape(Level.chunk_size_X, Level.chunk_size_Z, Level.chunk_size_Y)
+        for y in xrange(Level.chunk_size_Y):
+            profile = topography.translator[blocks[...,y]]
+            water = (profile == -1) * 1
+            colors = topography.topographic_colors[((profile + water) * (y + 2)) + water].reshape(
+                Level.chunk_size_X, Level.chunk_size_Z, Level.color_depth
+            )
+
+            image_array[array_offset_Z : array_offset_Z + Level.chunk_size_Z,
+                array_offset_X : array_offset_X + Level.chunk_size_X] = overlay_chunk(
+                    colors.swapaxes(0, 1),
+                    image_array[array_offset_Z : array_offset_Z + Level.chunk_size_Z,
+                        array_offset_X : array_offset_X + Level.chunk_size_X])
+        print 'Finished chunk %s' % str((array_offset_X, array_offset_Z))
     except IndexError, err:
         print 'Failed chunk: %s' % err
 
@@ -258,6 +282,7 @@ def overlay_pixel(src, dst):
 render_modes = dict({
     'overhead':     render_overhead_chunk,
     #'oblique':      render_oblique_chunk,
+    'topographic':  render_topographic_chunk,
 })
 
 if __name__ == '__main__':
